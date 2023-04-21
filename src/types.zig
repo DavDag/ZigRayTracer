@@ -1,8 +1,8 @@
 const std = @import("std");
 
-var rnd_gen = std.rand.DefaultPrng.init(0);
-var rnd_inst = rnd_gen.random();
+threadlocal var rnd_gen: std.rand.Xoshiro256 = std.rand.DefaultPrng.init(0);
 pub fn Rnd_f32() f32 {
+    const rnd_inst: std.rand.Random = rnd_gen.random();
     return rnd_inst.float(f32);
 }
 
@@ -33,11 +33,17 @@ pub const Color = struct {
         self.b *= tmp;
     }
 
-    pub fn gamma(self: *Color, comptime scalar: f32) void {
+    pub fn gamma(self: *Color, scalar: f32) void {
         const exp: f32 = 1.0 / scalar;
         self.r = std.math.pow(f32, self.r, exp);
         self.g = std.math.pow(f32, self.g, exp);
         self.b = std.math.pow(f32, self.b, exp);
+    }
+
+    pub fn combine(self: *Color, other: Color) void {
+        self.r *= other.r;
+        self.g *= other.g;
+        self.b *= other.b;
     }
 
     pub fn Mix(a: Color, b: Color, t: f32) Color {
@@ -117,7 +123,7 @@ pub const Vec3 = struct {
         var res: Vec3 = .{};
         res.add(vec);
         res.sub(surfNormTimes2Dot);
-        return res; // vec - surfNorm * (dot(vec, surfNorm) * 2);
+        return res;
     }
 
     pub fn RndUnitSphere() Vec3 {
@@ -137,46 +143,48 @@ pub const Vec3 = struct {
 };
 
 pub const Ray = struct {
-    o: Vec3 = .{ .x = 0, .y = 0, .z = 0 }, // origin
-    d: Vec3 = .{ .x = 0, .y = 0, .z = 0 }, // direction
+    orig: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
+    dir: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
 
     pub fn at(self: Ray, t: f32) Vec3 {
         var res: Vec3 = .{};
-        res.add(self.d);
+        res.add(self.dir);
         res.mul(t);
-        res.add(self.o);
+        res.add(self.orig);
         return res;
     }
 };
 
 pub const RayHit = struct {
-    p: Vec3 = .{ .x = 0, .y = 0, .z = 0 }, // hit position
-    n: Vec3 = .{ .x = 0, .y = 0, .z = 0 }, // hit normal
-    t: f32 = 0, // hit time
-    tmin: f32 = 0, // hit time range limit
-    tmax: f32 = 0, // hit time range limit
-    m: ?*const Material = null, // hit material
+    pos: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
+    norm: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
+    tmin: f32 = 0,
+    tmax: f32 = 0,
+    mat: ?*const Material = null,
 };
 
 pub const Material = struct {
-    a: Color = .{ .r = 0, .g = 0, .b = 0 }, // albedo
-    b: f32 = 0, // blurr
-    r: f32 = 0, // refraction ratio
+    albedo: Color = .{ .r = 0, .g = 0, .b = 0 },
+    blurr: f32 = 0,
+    refraction_ratio: f32 = 0,
 
     pub fn scatter(self: Material, ray: Ray, payload: RayHit, att: *Color, sca: *Ray) bool {
         _ = ray;
 
         var rnd_dir: Vec3 = Vec3.RndUnitSphere();
-        rnd_dir.mul(self.b);
+        rnd_dir.mul(self.blurr);
 
         var out_dir = .{};
         _ = out_dir;
-        rnd_dir.add(payload.n);
+        rnd_dir.add(payload.norm);
         rnd_dir.add(rnd_dir);
         rnd_dir.unit();
 
-        att.* = self.a;
-        sca.* = .{ .o = payload.p, .d = rnd_dir };
+        att.* = self.albedo;
+        sca.* = .{
+            .orig = payload.pos,
+            .dir = rnd_dir,
+        };
         return true;
     }
 };

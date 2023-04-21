@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const Camera = @import("camera.zig").Camera;
 const Sphere = @import("sphere.zig").Sphere;
+const Scene = @import("scene.zig").Scene;
 
 const Color = types.Color;
 const Vec3 = types.Vec3;
@@ -9,91 +10,103 @@ const Ray = types.Ray;
 const RayHit = types.RayHit;
 const Material = types.Material;
 
-var cam: Camera = .{
-    .f = 45.0,
-    .p = .{ .x = 0, .y = 0, .z = 1 },
-    .t = .{ .x = 0, .y = 0, .z = 0 },
-};
-
-pub fn process_image(comptime w: u32, comptime h: u32, out_image: []Color) !void {
-    const w_f32 = @intToFloat(f32, w);
-    const h_f32 = @intToFloat(f32, h);
-    cam.a = w_f32 / h_f32;
-    cam.init();
-
-    var y: u32 = 0;
-    while (y < h) : (y += 1) {
-        var x: u32 = 0;
-        while (x < w) : (x += 1) {
-            const x_f32 = @intToFloat(f32, x);
-            const y_f32 = @intToFloat(f32, y);
-            var c: Color = process_pixel(x_f32, y_f32, w_f32, h_f32);
-            c.gamma(2.0);
-            out_image[y * w + x] = c;
+pub fn process_scene(scene: Scene) !void {
+    if (scene.num_threads < 2) {
+        for (0..scene.h) |y| {
+            for (0..scene.w) |x| {
+                const x_u32 = @intCast(u32, x);
+                const y_u32 = @intCast(u32, y);
+                const c: Color = process_pixel(scene, x_u32, y_u32);
+                scene._out.?[y_u32 * scene.w + x_u32] = c;
+            }
+        }
+    } else {
+        var job_index: u32 = 0;
+        var threads: [256]std.Thread = undefined;
+        for (0..scene.num_threads) |i| {
+            threads[i] = try std.Thread.spawn(.{}, process_job, .{ i, scene, &job_index });
+        }
+        for (0..scene.num_threads) |i| {
+            threads[i].join();
         }
     }
 }
 
-fn process_pixel(px: f32, py: f32, w: f32, h: f32) Color {
-    const samples: u32 = 32;
-    const max_depth: u32 = 8;
+fn process_job(thread_id: usize, scene: Scene, job_index: *u32) !void {
+    std.debug.print("[{d: >2}]: Running\n", .{thread_id});
+
+    const jobs_count_x: u32 = try std.math.divCeil(u32, scene.w, scene.job_size);
+    const jobs_count_y: u32 = try std.math.divCeil(u32, scene.h, scene.job_size);
+    const jobs_count = jobs_count_x * jobs_count_y;
+
+    var timer = try std.time.Timer.start();
+    var processing: u64 = 0;
+    var processed: u64 = 0;
+    while (true) {
+        const index = @atomicRmw(u32, job_index, .Add, 1, .Monotonic);
+        if (index >= jobs_count) break;
+
+        const sy: u32 = @divTrunc(index, jobs_count_x) * scene.job_size;
+        const sx: u32 = @rem(index, jobs_count_x) * scene.job_size;
+        const ey: u32 = @min(sy + scene.job_size, scene.h);
+        const ex: u32 = @min(sx + scene.job_size, scene.w);
+
+        for (sy..ey) |y| {
+            for (sx..ex) |x| {
+                const x_u32 = @intCast(u32, x);
+                const y_u32 = @intCast(u32, y);
+                const c: Color = process_pixel(scene, x_u32, y_u32);
+                scene._out.?[y_u32 * scene.w + x_u32] = c;
+            }
+        }
+        processing += timer.lap();
+        processed += 1;
+    }
+    const processing_ms = processing / std.time.ns_per_ms;
+    const processing_avg_ms = processing_ms / processed;
+    std.debug.print(
+        "[{d: >2}]: {d: >3}(ms) / {d: >6}(ms) | {d: >4}#\n",
+        .{ thread_id, processing_avg_ms, processing_ms, processed },
+    );
+}
+
+fn process_pixel(scene: Scene, px: u32, py: u32) Color {
+    const px_f32 = @intToFloat(f32, px);
+    const py_f32 = @intToFloat(f32, py);
     var res: Color = Color.BLACK;
-    for (0..samples) |_| {
+    for (0..scene.samples) |_| {
         const offx: f32 = types.Rnd_f32();
         const offy: f32 = types.Rnd_f32();
-        const dx = (px + offx) / w;
-        const dy = (py + offy) / h;
-        const ray = cam.getRayFor(dx, dy);
-        const col = trace(ray, max_depth);
+        const dx = (px_f32 + offx) / scene._w_f32;
+        const dy = (py_f32 + offy) / scene._h_f32;
+        const ray = scene.camera.getRayFor(dx, dy);
+        const col = trace(scene, ray, scene.max_depth);
         res.add(col);
     }
-    const samples_f32: f32 = @intToFloat(f32, samples);
+    const samples_f32 = @intToFloat(f32, scene.samples);
     res.div(samples_f32);
+    res.gamma(scene.gamma);
     return res;
 }
 
-const ground_mat: Material = .{
-    .a = .{ .r = 0.5, .g = 0.5, .b = 0.5 },
-    .b = 1,
-    .r = 0,
-};
-const middle_mat: Material = .{
-    .a = .{ .r = 1.0, .g = 1.0, .b = 1.0 },
-    .b = 1,
-    .r = 0,
-};
-const ground_sphere: Sphere = .{
-    .c = .{ .x = 0, .y = -100.5, .z = 0 },
-    .r = 100,
-    .m = &ground_mat,
-};
-const middle_sphere: Sphere = .{
-    .c = .{ .x = 0, .y = 0, .z = 0 },
-    .r = 0.5,
-    .m = &middle_mat,
-};
-
-fn trace(ray: Ray, depth: u32) Color {
+fn trace(scene: Scene, ray: Ray, depth: u32) Color {
     if (depth == 0) {
         return Color.BLACK;
     }
-
     var payload: RayHit = .{ .tmin = 0.0001, .tmax = std.math.inf_f32 };
-    _ = ground_sphere.hit(ray, &payload);
-    _ = middle_sphere.hit(ray, &payload);
-
-    if (payload.m != null) {
+    if (scene.hit(ray, &payload)) {
         var sca: Ray = .{};
         var att: Color = .{};
-        if (payload.m.?.*.scatter(ray, payload, &att, &sca)) {
-            const res = trace(sca, depth - 1);
-            return .{ .r = att.r * res.r, .g = att.g * res.g, .b = att.b * res.b };
+        if (payload.mat.?.*.scatter(ray, payload, &att, &sca)) {
+            const res = trace(scene, sca, depth - 1);
+            att.combine(res);
+            return att;
         }
         return Color.BLACK;
     } else {
         const sky_color_a: Color = .{ .r = 1.0, .g = 1.0, .b = 1.0 };
         const sky_color_b: Color = .{ .r = 0.5, .g = 0.7, .b = 1.0 };
-        const t = (ray.d.y + 1) / 2;
+        const t = (ray.dir.y + 1) / 2;
         return Color.Mix(sky_color_a, sky_color_b, t);
     }
 }

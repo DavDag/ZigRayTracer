@@ -3,6 +3,7 @@ const testing = std.testing;
 const types = @import("types.zig");
 
 const Color = types.Color;
+const Vec3 = types.Vec3;
 
 fn expectColor(c: Color, comptime r: f32, comptime g: f32, comptime b: f32) !void {
     try testing.expectEqual(r, c.r);
@@ -119,11 +120,13 @@ test "Color.gamma" {
     try expectColor(c4, 0, 0, 0);
 }
 
-test "Color.mix" {
+test "Color.combine" {
     // TODO
 }
 
-const Vec3 = types.Vec3;
+test "Color.mix" {
+    // TODO
+}
 
 fn expectVec3(c: Vec3, comptime x: f32, comptime y: f32, comptime z: f32) !void {
     try testing.expectApproxEqAbs(x, c.x, 0.0001);
