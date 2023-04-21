@@ -24,6 +24,7 @@ pub const Camera = struct {
         var w: Vec3 = .{};
         w.add(self.position);
         w.sub(self.target);
+        w.unit();
 
         const u: Vec3 = Vec3.Cross(.{ .x = 0, .y = 1, .z = 0 }, w);
         const v: Vec3 = Vec3.Cross(w, u);

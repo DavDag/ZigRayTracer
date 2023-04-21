@@ -104,9 +104,7 @@ fn trace(scene: Scene, ray: Ray, depth: u32) Color {
         }
         return Color.BLACK;
     } else {
-        const sky_color_a: Color = .{ .r = 1.0, .g = 1.0, .b = 1.0 };
-        const sky_color_b: Color = .{ .r = 0.5, .g = 0.7, .b = 1.0 };
         const t = (ray.dir.y + 1) / 2;
-        return Color.Mix(sky_color_a, sky_color_b, t);
+        return Color.Mix(scene.sky_color_a, scene.sky_color_b, t);
     }
 }
